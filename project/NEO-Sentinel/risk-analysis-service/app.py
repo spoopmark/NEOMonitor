@@ -10,7 +10,7 @@ USER_SERVICE_URL = "http://user-service:5002"
 @app.route('/report/<user_id>', methods=['GET'])
 def generate_risk_report(user_id):
     # get user data 
-    user_response = requests.get(f"{USER_SERVICE_URL}/{user_id}")
+    user_response = requests.get(f"{USER_SERVICE_URL}/users/{user_id}")
     if user_response.status_code != 200:
         return jsonify({"error": "Could not find user"}), 404
     
@@ -18,7 +18,7 @@ def generate_risk_report(user_id):
     threshold = user_data['risk_threshold_km']
 
     # 2. Get Normalized Asteroid Data from Asteroid Service
-    asteroid_response = requests.get(ASTEROID_SERVICE_URL)
+    asteroid_response = requests.get(f"{ASTEROID_SERVICE_URL}/asteroids")
     if asteroid_response.status_code != 200:
         return jsonify({"error": "Asteroid service is down"}), 500
     
@@ -63,4 +63,4 @@ def health_check():
 
 
 if __name__ == '__main__':
-    app.run(port=5003) # Risk Service lives on 5003
+    app.run(host='0.0.0.0', port=5003) # Risk Service lives on 5003
