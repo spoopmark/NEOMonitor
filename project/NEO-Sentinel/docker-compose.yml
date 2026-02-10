@@ -1,21 +1,87 @@
 version: "3.8"
 services:
+  api-gateway:
+    build: ./api-gateway
+    ports:
+      - "8000:8000"
+    depends_on:
+      - asteroid-service
+      - user-service
+      - risk-service
+      - redis
+    environment:
+      - FLASK_ENV=production
+      - REDIS_URL=redis://redis:6379/0
+    networks:
+      - neo-sentinel
+
   asteroid-service:
     build: ./asteroid-data-service
     ports:
       - "5001:5001"
     environment:
       - NASA_API_KEY=${NASA_API_KEY}
+      - REDIS_URL=redis://redis:6379/1
     depends_on:
-      - user-service
-      - risk-service
+      - redis
+    networks:
+      - neo-sentinel
 
   user-service:
     build: ./user-watchlist-service
     ports:
       - "5002:5002"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://user:password@db:5432/neo_sentinel}
+    depends_on:
+      - db
+    networks:
+      - neo-sentinel
 
   risk-service:
     build: ./risk-analysis-service
     ports:
       - "5003:5003"
+    networks:
+      - neo-sentinel
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=neo_sentinel
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - neo-sentinel
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - neo-sentinel
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  nasa_api_key:
+    file: ./nasa_api_key.txt
+
+volumes:
+  db_data:
+
+networks:
+  neo-sentinel:
+    driver: bridge

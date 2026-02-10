@@ -2,23 +2,374 @@ openapi: 3.0.0
 info:
   title: NEO-Sentinel API
   version: 1.0.0
-  description: Microservice system for tracking hazardous asteroids based on user risk profiles.
+  description: Microservice system for tracking hazardous Near-Earth Objects (NEOs) based on user risk profiles.
+  contact:
+    name: NEO-Sentinel Team
+  license:
+    name: MIT
+servers:
+  - url: http://localhost:8000
+    description: API Gateway (local development)
+  - url: http://localhost:5001
+    description: Asteroid Data Service
+  - url: http://localhost:5002
+    description: User Watchlist Service
+  - url: http://localhost:5003
+    description: Risk Analysis Service
+
+components:
+  schemas:
+    Asteroid:
+      type: object
+      properties:
+        id:
+          type: string
+          description: NASA NEO object ID
+        name:
+          type: string
+          description: Official name/designation of the asteroid
+        diameter_km:
+          type: number
+          format: float
+          description: Estimated maximum diameter in kilometers
+        miss_distance_km:
+          type: number
+          format: float
+          description: Closest approach distance in kilometers
+        is_hazardous:
+          type: boolean
+          description: Potentially hazardous status from NASA classification
+        close_approach_date:
+          type: string
+          format: date
+          description: Date of closest approach (YYYY-MM-DD)
+      required:
+        - id
+        - name
+        - miss_distance_km
+        - close_approach_date
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique user identifier
+        name:
+          type: string
+          description: User's display name
+        risk_threshold_km:
+          type: number
+          format: float
+          description: Alert threshold in km (asteroids within this distance trigger alerts)
+      required:
+        - id
+        - name
+        - risk_threshold_km
+
+    WatchlistEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Asteroid ID
+        date:
+          type: string
+          format: date-time
+          description: Close approach date in ISO 8601 format
+        miss_distance_km:
+          type: number
+          format: float
+          description: Miss distance in kilometers
+      required:
+        - id
+        - date
+        - miss_distance_km
+
+    RiskReport:
+      type: object
+      properties:
+        user:
+          type: string
+          description: User's display name
+        alert_threshold:
+          type: number
+          format: float
+          description: User's risk threshold in km
+        risky_objects_found:
+          type: integer
+          description: Count of asteroids within threshold
+        objects:
+          type: array
+          items:
+            $ref: '#/components/schemas/Asteroid'
+        summary:
+          type: string
+          description: Human-readable summary of findings
+      required:
+        - user
+        - alert_threshold
+        - risky_objects_found
+        - summary
+
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, down]
+        service:
+          type: string
+          description: Name of the service reporting health
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+
 paths:
   /asteroids:
     get:
-      summary: Get normalized asteroid data
+      operationId: getAsteroids
+      summary: Get normalized asteroid data from NASA API
+      description: Fetches and normalizes NEO data from NASA's near-Earth objects API, optionally filtered by date.
+      tags:
+        - Asteroid Data Service
+      parameters:
+        - name: date
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date
+          description: Optional date filter (YYYY-MM-DD). If provided, returns asteroids approaching on that date.
       responses:
         '200':
-          description: A list of clean asteroid records
-  /users/{id}:
+          description: Array of normalized asteroids
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Asteroid'
+              example:
+                - id: "2026AA"
+                  name: "Asteroid 2026 AA"
+                  diameter_km: 0.12
+                  miss_distance_km: 75000.5
+                  is_hazardous: false
+                  close_approach_date: "2026-02-12"
+        '502':
+          description: NASA API unreachable or API key not configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /users/{user_id}:
     get:
+      operationId: getUser
       summary: Get user risk preferences
+      description: Retrieves a user's profile including their configured risk threshold.
+      tags:
+        - User Watchlist Service
       parameters:
-        - name: id
+        - name: user_id
           in: path
           required: true
           schema:
             type: string
+          description: The unique identifier of the user
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              example:
+                id: "1"
+                name: "Professor"
+                risk_threshold_km: 0.1
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "User not found"
+
+  /users/{user_id}/watchlist:
+    get:
+      operationId: getWatchlist
+      summary: Get user's watchlist with optional sorting and search
+      description: >
+        Returns a user's saved asteroid watchlist. Supports filtering by asteroid ID,
+        sorting by date or miss distance, and ascending/descending order.
+      tags:
+        - User Watchlist Service
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of the user
+        - name: id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Exact asteroid ID to search for
+        - name: search_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Substring to filter asteroid IDs (backwards-compatible)
+        - name: sort_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [date, miss_distance]
+          description: Field to sort by. Default is no sorting.
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+          description: Sort order (ascending or descending)
+      responses:
+        '200':
+          description: User's watchlist entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    type: string
+                  watchlist:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/WatchlistEntry'
+              example:
+                user_id: "1"
+                watchlist:
+                  - id: "2026BB"
+                    date: "2026-02-12T08:30:00Z"
+                    miss_distance_km: 15000.0
+                  - id: "2026AA"
+                    date: "2026-02-01T12:00:00Z"
+                    miss_distance_km: 75000.0
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /report/{user_id}:
     get:
+      operationId: generateRiskReport
       summary: Generate a risk report for a specific user
+      description: >
+        Orchestrates a cross-service call: fetches the user's profile and risk threshold,
+        retrieves all asteroids, filters those within the user's threshold, and returns
+        a consolidated risk report.
+      tags:
+        - Risk Analysis Service
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of the user
+      responses:
+        '200':
+          description: Risk report with filtered asteroids
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskReport'
+              example:
+                user: "Professor"
+                alert_threshold: 0.1
+                risky_objects_found: 2
+                objects:
+                  - id: "2026BB"
+                    name: "Asteroid 2026 BB"
+                    diameter_km: 0.05
+                    miss_distance_km: 0.08
+                    is_hazardous: true
+                    close_approach_date: "2026-02-12"
+                summary: "Found 2 asteroids within 0.1km of Earth."
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Asteroid service is down
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /dashboard/{user_id}:
+    get:
+      operationId: viewDashboard
+      summary: View risk report as HTML dashboard
+      description: Renders the risk report in a human-readable HTML format.
+      tags:
+        - Risk Analysis Service
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The unique identifier of the user
+      responses:
+        '200':
+          description: HTML dashboard
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check for all services
+      description: Returns the health status of the service. Each service exposes its own health endpoint.
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              example:
+                status: "healthy"
+                service: "asteroid-data-service"
+
+tags:
+  - name: Asteroid Data Service
+    description: Fetches and normalizes asteroid data from NASA API
+  - name: User Watchlist Service
+    description: Manages user profiles and watchlists
+  - name: Risk Analysis Service
+    description: Orchestrates multi-service calls and generates risk reports
+  - name: Health
+    description: Service health monitoring

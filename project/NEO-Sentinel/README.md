@@ -14,16 +14,43 @@ NEO-Sentinel is a distributed system designed to monitor Near-Earth Objects (NEO
 3. **Risk Analysis Service (Port 5003):** The "Orchestrator." It fetches data from the other two services, applies the user's logic, and generates a final risk report.
 
 ## Setup & Installation
-### Prerequisites
-* Docker Desktop installed and running.
-* A NASA API Key (obtained from api.nasa.gov).
 
-### Running the System
-1. Clone the repository.
-2. Set your API key as an environment variable:
-   `$env:NASA_API_KEY="YOUR_KEY_HERE"`
-3. Run the orchestration command:
-   `docker-compose up --build`
+### Prerequisites
+- Docker Desktop installed and running
+- A free NASA API key (get one from https://api.nasa.gov/)
+
+### Quick Start
+
+1. **Clone the repository:**
+   ```bash
+   git clone <repo-url>
+   cd NEO-Sentinel/project/NEO-Sentinel
+   ```
+
+2. **Start all services:**
+   ```bash
+   docker-compose up --build
+   ```
+
+   The system will start:
+   - **API Gateway** on http://localhost:8000
+   - **Asteroid Service** on http://localhost:5001
+   - **User Service** on http://localhost:5002 (with PostgreSQL)
+   - **Risk Analysis Service** on http://localhost:5003
+   - **Redis cache** on localhost:6379
+
+
+### Verify Services Are Running
+
+```bash
+# Check all services healthy
+curl http://localhost:8000/health
+
+# Or check each individually
+curl http://localhost:5001/health  # Asteroid Service
+curl http://localhost:5002/health  # User Service
+curl http://localhost:5003/health  # Risk Service
+```
 
 ## Example API Calls
 * **Generate Report:** `GET http://localhost:5003/report/1`
