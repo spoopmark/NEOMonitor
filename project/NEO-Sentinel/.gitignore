@@ -1,14 +1,12 @@
+# --- Security: NEVER COMMIT THESE ---
 .env
 
-
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -21,27 +19,36 @@ parts/
 sdist/
 var/
 wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
+# --- Virtual Environments ---
+.venv/
+env/
+venv/
+ENV/
+
+# --- OS Generated Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- IDE Settings (Optional but recommended) ---
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-.DS_Store
 
-.dockerignore
+# --- Database ---
+*.sql
+*.sqlite
+*.db
+*.dump
 
-.pytest_cache/
-.coverage
-htmlcov/
-
-*.log
-logs/
-
-.DS_Store
-Thumbs.db
+# If you ever decide to map data locally instead of using a volume
+data/
+db_data/
+postgres_data/

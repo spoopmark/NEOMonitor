@@ -1,87 +1,99 @@
 version: "3.8"
+
 services:
+  # --- The Front Door ---
   api-gateway:
     build: ./api-gateway
     ports:
       - "8000:8000"
-    depends_on:
-      - asteroid-service
-      - user-service
-      - risk-service
-      - redis
     environment:
       - FLASK_ENV=production
       - REDIS_URL=redis://redis:6379/0
+      # Internal Service Discovery URLs
+      - ASTEROID_SERVICE_URL=http://asteroid-service:5001
+      - USER_SERVICE_URL=http://user-service:5002
+      - RISK_SERVICE_URL=http://risk-service:5003
+    depends_on:
+      redis:
+        condition: service_healthy
+      asteroid-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      risk-service:
+        condition: service_started
     networks:
       - neo-sentinel
 
+  # --- The Data Fetcher ---
   asteroid-service:
-    build: ./asteroid-data-service
-    ports:
-      - "5001:5001"
+    build: ./asteroid-service
     environment:
+      # Pulls key securely from your .env file
       - NASA_API_KEY=${NASA_API_KEY}
       - REDIS_URL=redis://redis:6379/1
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     networks:
       - neo-sentinel
 
+  # --- The User Manager ---
   user-service:
     build: ./user-watchlist-service
-    ports:
-      - "5002:5002"
     environment:
-      - DATABASE_URL=${DATABASE_URL:-postgresql://user:password@db:5432/neo_sentinel}
+      # Connects to the 'db' service defined below
+      - DATABASE_URL=postgresql://user:password@db:5432/neo_sentinel
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     networks:
       - neo-sentinel
 
+  # --- The Brain ---
   risk-service:
     build: ./risk-analysis-service
-    ports:
-      - "5003:5003"
+    environment:
+      - ASTEROID_SERVICE_URL=http://asteroid-service:5001
+      - USER_SERVICE_URL=http://user-service:5002
+    depends_on:
+      - asteroid-service
+      - user-service
     networks:
       - neo-sentinel
 
+  # --- The Infrastructure ---
   db:
     image: postgres:15-alpine
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=neo_sentinel
-    ports:
-      - "5432:5432"
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     volumes:
       - db_data:/var/lib/postgresql/data
     networks:
       - neo-sentinel
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U user -d neo_sentinel"]
+      interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     networks:
       - neo-sentinel
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
 
-secrets:
-  nasa_api_key:
-    file: ./nasa_api_key.txt
-
+# Persistent storage for the database
 volumes:
   db_data:
 
+# Internal network for container-to-container communication
 networks:
   neo-sentinel:
     driver: bridge

@@ -1,4 +1,5 @@
-flask
-requests
-flask-limiter
-redis
+flask==3.0.0
+flask-limiter==3.5.0
+redis==5.0.1
+requests==2.31.0
+gunicorn==21.2.0

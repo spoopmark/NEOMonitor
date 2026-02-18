@@ -1,15 +1,19 @@
-# 1. Use a lightweight Python image
-FROM python:3.11-slim
+# user-watchlist-service/Dockerfile
+FROM python:3.9-slim
 
-# 2. Set the directory inside the container
+# Install system dependencies for PostgreSQL
+RUN apt-get update && apt-get install -y \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# 3. Copy the requirements and install them
+# Copy requirements first to leverage Docker cache
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy the rest of the code
-COPY . .
+COPY app.py .
 
-# 5. Command to run the service
+# Use Gunicorn for production-grade serving
 CMD ["python", "app.py"]
