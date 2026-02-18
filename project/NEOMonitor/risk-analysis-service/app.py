@@ -1,106 +1,134 @@
-from flask import Flask, jsonify, render_template_string
+import os
 import requests
 import logging
-import os
+from flask import Flask, jsonify, render_template_string
 
-# app.py - risk-analysis-service
-
-app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Internal Service URLs
-ASTEROID_SERVICE_URL = os.environ.get("ASTEROID_SERVICE_URL", "http://asteroid-service:5001")
-USER_SERVICE_URL = os.environ.get("USER_SERVICE_URL", "http://user-service:5002")
+app = Flask(__name__)
 
-def get_internal_data(url):
-    try:
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        return response.json(), None
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Service communication error: {str(e)}")
-        return None, str(e)
+# Service Discovery
+ASTEROID_SERVICE = os.environ.get('ASTEROID_SERVICE_URL', 'http://asteroid-service:5001')
+USER_SERVICE = os.environ.get('USER_SERVICE_URL', 'http://user-service:5002')
 
-@app.route("/report/<user_id>", methods=["GET"])
-def generate_risk_report(user_id):
-    # 1. Fetch User Data
-    user_data, error = get_internal_data(f"{USER_SERVICE_URL}/users/{user_id}")
-    if error:
-        return jsonify({"error": f"User service unreachable: {error}"}), 503
-    if not user_data:
-        return jsonify({"error": "User not found"}), 404
-
-    threshold = user_data.get("risk_threshold_km", 1000000.0)
-
-    # 2. Fetch Asteroid Data
-    asteroid_data, error = get_internal_data(f"{ASTEROID_SERVICE_URL}/asteroids")
-    if error:
-        return jsonify({"error": f"Asteroid service unreachable: {error}"}), 503
-
-    # 3. Logic: Filter asteroids within the user's risk threshold
-    # Note: NASA miss distances are large. If miss_distance_km < threshold, it's a 'hit'
-    risky_objects = [
-        {
-            "id": a["id"],
-            "name": a["name"],
-            "diameter_km": round(a["diameter_km"], 4),
-            "miss_distance_km": round(a["miss_distance_km"], 2),
-            "is_hazardous": a["is_hazardous"]
-        }
-        for a in asteroid_data
-        if a.get("miss_distance_km") is not None and a["miss_distance_km"] <= threshold
-    ]
-
-    return jsonify({
-        "user": user_data["name"],
-        "alert_threshold_km": threshold,
-        "risky_objects_found": len(risky_objects),
-        "objects": risky_objects,
-        "summary": f"Analyzed {len(asteroid_data)} objects. Found {len(risky_objects)} within {threshold:,} km."
-    }), 200
-
-@app.route("/dashboard/<user_id>")
-def dashboard(user_id):
-    # Internal call to the report route logic
-    report_response, status = generate_risk_report(user_id)
+# HTML Template (Embedded for simplicity)
+DASHBOARD_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>NEOMonitor Dashboard</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f0f2f5; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .danger { color: #d32f2f; font-weight: bold; }
+        .safe { color: #388e3c; }
+        h1 { color: #1a237e; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+    </style>
+</head>
+<body>
+    <h1>🛰️ NEOMonitor Risk Analysis</h1>
     
-    if status != 200:
-        return f"<h1>Error</h1><p>{report_response.get_json().get('error')}</p>", status
-
-    report = report_response.get_json()
-
-    html = """
-    <html>
-        <head><title>NEO-Sentinel Dashboard</title></head>
-        <body style="font-family: sans-serif; padding: 20px;">
-            <h1>NEO-Sentinel Risk Report for {{ report.user }}</h1>
-            <p><strong>Alert Threshold:</strong> {{ "{:,}".format(report.alert_threshold_km) }} km</p>
-            <div style="background: #f4f4f4; padding: 15px; border-radius: 5px;">
-                <h3>Summary: {{ report.summary }}</h3>
-            </div>
-            <hr>
-            <ul>
-                {% for obj in report.objects %}
-                <li>
-                    <strong>{{ obj.name }}</strong><br>
-                    Distance: {{ "{:,}".format(obj.miss_distance_km) }} km | 
-                    Diameter: {{ obj.diameter_km }} km 
-                    {% if obj.is_hazardous %}<span style="color: red;">[POTENTIALLY HAZARDOUS]</span>{% endif %}
-                </li>
-                {% endfor %}
-            </ul>
-            {% if not report.objects %}
-                <p>No immediate threats found within your threshold.</p>
+    <div class="card">
+        <h2>User Profile: {{ user.name }}</h2>
+        <p><strong>Alert Threshold:</strong> {{ "{:,.0f}".format(user.risk_threshold_km) }} km</p>
+        <p><strong>Status:</strong> 
+            {% if risk_stats.dangerous_count > 0 %}
+                <span class="danger">⚠️ {{ risk_stats.dangerous_count }} Threats Detected</span>
+            {% else %}
+                <span class="safe">✅ No Immediate Threats</span>
             {% endif %}
-        </body>
-    </html>
-    """
-    return render_template_string(html, report=report)
+        </p>
+    </div>
 
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"status": "healthy", "service": "risk-analysis-service"}), 200
+    <div class="card">
+        <h3>Asteroid Approaches (Today)</h3>
+        <table>
+            <tr>
+                <th>Asteroid Name</th>
+                <th>Diameter (Est)</th>
+                <th>Miss Distance</th>
+                <th>Risk Status</th>
+            </tr>
+            {% for ast in asteroids %}
+            <tr>
+                <td>{{ ast.name }}</td>
+                <td>{{ "{:.2f}".format(ast.diameter_meters) }} m</td>
+                <td>{{ "{:,.0f}".format(ast.miss_distance_km) }} km</td>
+                <td>
+                    {% if ast.is_risky %}
+                        <span class="danger">TOO CLOSE</span>
+                    {% else %}
+                        <span class="safe">Safe</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</body>
+</html>
+"""
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5003)
+@app.route('/<int:user_id>')
+def get_dashboard(user_id):
+    try:
+        # 1. Get User Config
+        user_resp = requests.get(f"{USER_SERVICE}/users/{user_id}")
+        if user_resp.status_code != 200:
+            return f"User {user_id} not found", 404
+        user_data = user_resp.json()
+        threshold = user_data['risk_threshold_km']
+
+        # 2. Get Asteroid Data
+        neo_resp = requests.get(f"{ASTEROID_SERVICE}/feed")
+        if neo_resp.status_code != 200:
+            return "Failed to fetch NASA data", 500
+        neo_data = neo_resp.json()
+
+        # 3. Analyze Risks
+        processed_asteroids = []
+        dangerous_count = 0
+        
+        # Parse nested NASA JSON structure
+        count = neo_data.get('element_count', 0)
+        near_earth_objects = neo_data.get('near_earth_objects', {})
+        
+        for date, objects in near_earth_objects.items():
+            for obj in objects:
+                # Extract key metrics
+                name = obj['name']
+                diameter = obj['estimated_diameter']['meters']['estimated_diameter_max']
+                
+                # Get closest approach data
+                close_approach = obj['close_approach_data'][0]
+                miss_km = float(close_approach['miss_distance']['kilometers'])
+                
+                is_risky = miss_km < threshold
+                if is_risky:
+                    dangerous_count += 1
+
+                processed_asteroids.append({
+                    "name": name,
+                    "diameter_meters": diameter,
+                    "miss_distance_km": miss_km,
+                    "is_risky": is_risky
+                })
+
+        # 4. Render Dashboard
+        return render_template_string(
+            DASHBOARD_TEMPLATE,
+            user=user_data,
+            asteroids=processed_asteroids,
+            risk_stats={"dangerous_count": dangerous_count}
+        )
+
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        return f"Internal System Error: {e}", 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5003)

@@ -1,164 +1,68 @@
-from flask import Flask, jsonify, request
-from sqlalchemy import create_engine, Column, String, Float, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
-from datetime import datetime, timezone
 import os
 import logging
+from flask import Flask, jsonify, request
+from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 
-# app.py - user-watchlist-service
-
-app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Database setup
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://user:password@localhost:5432/neo_sentinel"
-)
+app = Flask(__name__)
 
-try:
-    engine = create_engine(DATABASE_URL, echo=False)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-except Exception as e:
-    logger.error(f"Failed to connect to database: {str(e)}")
-    SessionLocal = None
-
+# Database Config
+DATABASE_URL = os.environ.get('DATABASE_URL')
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# --- Models ---
 class User(Base):
     __tablename__ = "users"
-    id = Column(String, primary_key=True, index=True)
-    name = Column(String, index=True)
-    risk_threshold_km = Column(Float)
-    watchlist_entries = relationship("WatchlistEntry", back_populates="user", cascade="all, delete-orphan")
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    risk_threshold_km = Column(Float, default=1000000.0)
 
-class WatchlistEntry(Base):
+class Watchlist(Base):
     __tablename__ = "watchlist_entries"
-    id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id"), primary_key=True)
-    date = Column(DateTime, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    asteroid_id = Column(String)
+    name = Column(String)
     miss_distance_km = Column(Float)
-    user = relationship("User", back_populates="watchlist_entries")
 
-# Create tables
-if engine:
+# --- Startup Logic (Create Tables & Seed Data) ---
+def init_db():
     try:
+        # Create Tables
         Base.metadata.create_all(bind=engine)
-        logger.info("Database tables initialized")
-    except Exception as e:
-        logger.error(f"Failed to create tables: {str(e)}")
-
-def seed_default_users():
-    if not SessionLocal: return
-    db = SessionLocal()
-    try:
-        existing = db.query(User).filter(User.id.in_(["1", "2"])).count()
-        if existing == 0:
-            users = [
-                User(id="1", name="Professor", risk_threshold_km=1000000.0), # Updated for realistic NASA distances
-                User(id="2", name="Student", risk_threshold_km=5000000.0),
-            ]
-            db.add_all(users)
+        logger.info("Database tables verified/created.")
+        
+        # Seed Default Users
+        db = SessionLocal()
+        if not db.query(User).filter_by(name="Professor").first():
+            db.add(User(name="Professor", risk_threshold_km=500000.0)) # Strict threshold
+            db.add(User(name="Student", risk_threshold_km=2000000.0))  # Loose threshold
             db.commit()
-            logger.info("Default users seeded")
-    except Exception as e:
-        logger.warning(f"Could not seed users: {str(e)}")
-    finally:
+            logger.info("Default users (Professor, Student) seeded.")
         db.close()
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
 
-seed_default_users()
+# Run initialization once on import
+init_db()
 
-def _parse_date(d):
-    try:
-        return datetime.fromisoformat(d.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-@app.route("/users/<user_id>", methods=["GET"])
+@app.route('/users/<int:user_id>', methods=['GET'])
 def get_user(user_id):
     db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.id == user_id).first()
-        if user:
-            return jsonify({
-                "id": user.id,
-                "name": user.name,
-                "risk_threshold_km": user.risk_threshold_km,
-            }), 200
+    user = db.query(User).filter(User.id == user_id).first()
+    db.close()
+    if not user:
         return jsonify({"error": "User not found"}), 404
-    finally:
-        db.close()
+    return jsonify({
+        "id": user.id,
+        "name": user.name,
+        "risk_threshold_km": user.risk_threshold_km
+    })
 
-@app.route("/users/<user_id>/watchlist", methods=["GET"])
-def get_watchlist(user_id):
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-
-        query = db.query(WatchlistEntry).filter(WatchlistEntry.user_id == user_id)
-        
-        # Filtering
-        id_exact = request.args.get("id")
-        if id_exact:
-            query = query.filter(WatchlistEntry.id == id_exact)
-        
-        entries = query.all()
-        result = [{
-            "id": e.id,
-            "date": e.date.isoformat() + "Z" if e.date else None,
-            "miss_distance_km": e.miss_distance_km,
-        } for e in entries]
-
-        # In-memory sorting for demonstration, though SQL ORDER BY is preferred
-        sort_by = request.args.get("sort_by")
-        order = request.args.get("order", "asc").lower()
-        if sort_by:
-            result.sort(key=lambda x: x.get(sort_by) or 0, reverse=(order == "desc"))
-
-        return jsonify({"user_id": user_id, "watchlist": result}), 200
-    finally:
-        db.close()
-
-@app.route("/users/<user_id>/watchlist", methods=["POST"])
-def add_to_watchlist(user_id):
-    data = request.get_json()
-    if not data or "id" not in data:
-        return jsonify({"error": "Missing asteroid id"}), 400
-
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-
-        entry = WatchlistEntry(
-            id=data["id"],
-            user_id=user_id,
-            date=_parse_date(data.get("date")) or datetime.now(timezone.utc),
-            miss_distance_km=float(data.get("miss_distance_km", 0)),
-        )
-        db.merge(entry) # Use merge to handle duplicates (UPSERT)
-        db.commit()
-        return jsonify({"message": "Watchlist updated", "asteroid_id": data["id"]}), 201
-    except Exception as e:
-        logger.error(f"Database error: {str(e)}")
-        return jsonify({"error": "Failed to save entry"}), 500
-    finally:
-        db.close()
-
-@app.route("/health", methods=["GET"])
-def health_check():
-    try:
-        db = SessionLocal()
-        db.execute("SELECT 1")
-        return jsonify({"status": "healthy", "service": "user-service", "database": "connected"}), 200
-    except Exception:
-        return jsonify({"status": "degraded", "service": "user-service", "database": "disconnected"}), 503
-    finally:
-        db.close()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5002)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5002)
